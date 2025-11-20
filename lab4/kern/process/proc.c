@@ -1,3 +1,4 @@
+      
 #include <proc.h>
 #include <kmalloc.h>
 #include <string.h>
@@ -104,7 +105,18 @@ alloc_proc(void)
          *       uint32_t flags;                             // Process flag
          *       char name[PROC_NAME_LEN + 1];               // Process name
          */
-        
+        proc->state = PROC_UNINIT;                          // 设置进程状态为未初始化
+        proc->pid = -1;                                     // 未分配PID
+        proc->runs = 0;                                     // 运行次数初始化为0
+        proc->kstack = 0;                                   // 内核栈地址初始化为0
+        proc->need_resched = 0;                             // 不需要调度
+        proc->parent = NULL;                                // 父进程指针初始化为NULL
+        proc->mm = NULL;                                    // 内存管理结构初始化为NULL
+        memset(&(proc->context), 0, sizeof(struct context));// 初始化上下文为0
+        proc->tf = NULL;                                    // 中断帧指针初始化为NULL
+        proc->pgdir = boot_pgdir_pa;                        // 页目录表基址设置为内核页目录表
+        proc->flags = 0;                                    // 进程标志初始化为0
+        memset(proc->name, 0, PROC_NAME_LEN + 1);           // 进程名初始化为空字符串
     }
     return proc;
 }
@@ -184,7 +196,15 @@ void proc_run(struct proc_struct *proc)
          *   lsatp():                   Modify the value of satp register
          *   switch_to():              Context switching between two processes
          */
-
+        bool intr_flag;
+        struct proc_struct *prev = current, *next = proc;
+        local_intr_save(intr_flag);                 // 禁用中断
+        {
+            current = proc;                         // 切换当前进程为要运行的进程
+            lsatp(next->pgdir);                     // 切换页表，使用新进程的地址空间
+            switch_to(&(prev->context), &(next->context)); // 实现上下文切换
+        }
+        local_intr_restore(intr_flag);              // 允许中断
     }
 }
 
@@ -322,7 +342,45 @@ int do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf)
     //    5. insert proc_struct into hash_list && proc_list
     //    6. call wakeup_proc to make the new child process RUNNABLE
     //    7. set ret vaule using child proc's pid
-    
+
+    // 1. 调用 alloc_proc 分配一个进程控制块
+    if ((proc = alloc_proc()) == NULL) {
+        goto fork_out;
+    }
+
+    // 设置父进程
+    proc->parent = current;
+
+    // 2. 调用 setup_kstack 为子进程分配内核栈
+    if (setup_kstack(proc) != 0) {
+        goto bad_fork_cleanup_proc;
+    }
+
+    // 3. 调用 copy_mm 复制或共享内存管理信息
+    if (copy_mm(clone_flags, proc) != 0) {
+        goto bad_fork_cleanup_kstack;
+    }
+
+    // 4. 调用 copy_thread 复制父进程的中断帧和上下文信息
+    copy_thread(proc, stack, tf);
+
+    // 5. 将新进程添加到进程列表和哈希表中
+    bool intr_flag;
+    local_intr_save(intr_flag);
+    {
+        proc->pid = get_pid();              // 获取新的 PID
+        hash_proc(proc);                    // 将进程加入哈希表
+        list_add(&proc_list, &(proc->list_link)); // 将进程加入进程链表
+        nr_process++;                       // 进程总数加1
+    }
+    local_intr_restore(intr_flag);
+
+    // 6. 调用 wakeup_proc 使新进程处于就绪状态
+    wakeup_proc(proc);
+
+    // 7. 返回新进程的 PID
+    ret = proc->pid;
+
 fork_out:
     return ret;
 
@@ -416,3 +474,5 @@ void cpu_idle(void)
         }
     }
 }
+
+    

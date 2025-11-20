@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <trap.h>
 #include <vmm.h>
+#include <sbi.h>
 
 #define TICK_NUM 100
 
@@ -111,6 +112,17 @@ void interrupt_handler(struct trapframe *tf)
         // clear_csr(sip, SIP_STIP);
 
         /*LAB3 请补充你在lab3中的代码 */ 
+        clock_set_next_event();
+        ticks ++;
+        static int num = 0;
+        if (ticks % TICK_NUM == 0) {
+            print_ticks();
+            ticks = 0;
+            num ++;
+            if (num == 10)
+                sbi_shutdown();
+        }
+        break;
         break;
     case IRQ_H_TIMER:
         cprintf("Hypervisor software interrupt\n");
