@@ -599,7 +599,7 @@ sfs_io_nolock(struct sfs_fs *sfs, struct sfs_inode *sin, void *buf, off_t offset
      * (3) If end position isn't aligned with the last block, Rd/Wr some content from begin to the (endpos % SFS_BLKSIZE) of the last block
 	 *       NOTICE: useful function: sfs_bmap_load_nolock, sfs_buf_op	
 	*/
-    // (1) 处理第一个块，如果offset不对齐
+    // (1) 如果offset不在块边界，先处理第一个不完整的块
     if ((blkoff = offset % SFS_BLKSIZE) != 0) {
         size = (nblks != 0) ? (SFS_BLKSIZE - blkoff) : (endpos - offset);
         if ((ret = sfs_bmap_load_nolock(sfs, sin, blkno, &ino)) != 0) {
@@ -610,30 +610,30 @@ sfs_io_nolock(struct sfs_fs *sfs, struct sfs_inode *sin, void *buf, off_t offset
         }
         alen += size;
         if (nblks == 0) {
-            goto out;
+            goto out;  // 所有数据都在第一个块中
         }
         buf += size;
         blkno++;
         nblks--;
     }
 
-    // (2) 处理中间的对齐块
-    if (nblks > 0) {
+    // (2) 处理中间的完整块
+    while (nblks > 0) {
         if ((ret = sfs_bmap_load_nolock(sfs, sin, blkno, &ino)) != 0) {
             goto out;
         }
-        if ((ret = sfs_block_op(sfs, buf, ino, nblks)) != 0) {
+        if ((ret = sfs_block_op(sfs, buf, ino, 1)) != 0) {
             goto out;
         }
-        alen += nblks * SFS_BLKSIZE;
-        buf += nblks * SFS_BLKSIZE;
-        blkno += nblks;
-        nblks = 0;
+        alen += SFS_BLKSIZE;
+        buf += SFS_BLKSIZE;
+        blkno++;
+        nblks--;
     }
 
-    // (3) 处理最后一个块，如果endpos不对齐
+    // (3) 如果还有剩余数据（最后一个不完整的块）
     if ((size = endpos % SFS_BLKSIZE) != 0) {
-        if ((ret = sfs_bmap_load_nolock(sfs, sin, blkno, &ino)) != 0) {
+        if ((ret = sfs_bmap_load_nolock(sfs, sin, endpos / SFS_BLKSIZE, &ino)) != 0) {
             goto out;
         }
         if ((ret = sfs_buf_op(sfs, buf, size, ino, 0)) != 0) {
